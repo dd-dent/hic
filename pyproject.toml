@@ -8,6 +8,7 @@ authors = [
     { name = "HIC Team" }
 ]
 dependencies = [
+    "anthropic>=0.45.2",
     "fastapi[standard]>=0.115.8",
     "trio>=0.28.0",
 ]
