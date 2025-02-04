@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.125.1",
+    "pytest-timeout>=2.3.1",
     "pytest>=8.3.4",
     "pytest-trio>=0.8.0",
     "ruff>=0.9.4",
@@ -30,6 +31,7 @@ trio_mode = true
 testpaths = ["hic/tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+timeout = 10
 
 [tool.ruff]
 line-length = 100
