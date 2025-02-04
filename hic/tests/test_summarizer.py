@@ -1,19 +1,30 @@
 """Tests for the SummarizerAgent."""
 import re
 import pytest
+import trio
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis.stateful import RuleBasedStateMachine, rule, Bundle, initialize
+from typing import List
 
 from hic.agents.summarizer import SummarizerAgent, SummaryError
 
-# Strategy for generating CHOFF states
+# Strategy for generating valid CHOFF states
 choff_states = st.lists(
-    st.text(
-        alphabet=st.characters(blacklist_categories=('Cs',)),
-        min_size=1
-    ).map(lambda s: f"{{state:{s}}}"),
-    min_size=1,  # At least one state required
+    st.builds(
+        lambda name, weight: f"{{state:{name}[{weight:.1f}]}}",
+        name=st.text(
+            alphabet=st.characters(
+                blacklist_categories=('Cs',),
+                blacklist_characters=['[', ']', '{', '}', ':', ',']
+            ),
+            min_size=1,
+            max_size=10
+        ),
+        weight=st.floats(min_value=0.1, max_value=1.0)
+    ),
+    min_size=1,
     max_size=3
 )
 
@@ -24,7 +35,7 @@ message_strategy = st.builds(
     text=st.text(min_size=1, max_size=200)
 )
 
-def create_mock_response(states, text):
+def create_mock_response(states: List[str], text: str) -> dict:
     """Create a mock response that preserves CHOFF states."""
     return {
         "content": [
@@ -41,7 +52,7 @@ def create_mock_response(states, text):
 @pytest.fixture
 def mock_client():
     """Create a mock Claude client."""
-    client = Mock()
+    client = AsyncMock()
     # Response will be set in individual tests
     return client
 
@@ -53,41 +64,45 @@ def summarizer(mock_client, tmp_path):
     return SummarizerAgent(
         client=mock_client,
         cache_dir=cache_dir,
-        batch_size=2
+        batch_size=2,
+        timeout=5.0  # Add timeout for tests
     )
 
-def test_summarize_batch(summarizer, mock_client):
+@pytest.mark.trio
+async def test_summarize_batch(summarizer, mock_client):
     """Test basic batch summarization functionality."""
     messages = [
-        "{state:analytical} Let's discuss database scaling options.",
-        "{state:analytical} I suggest we implement cache invalidation."
+        "{state:analytical[0.8]} Let's discuss database scaling options.",
+        "{state:analytical[0.7]} I suggest we implement cache invalidation."
     ]
     
     mock_client.create_message.return_value = create_mock_response(
-        ["{state:analytical}"],
+        ["{state:analytical[0.75]}"],
         "Discussion on database scaling and cache invalidation"
     )
     
-    summary = summarizer.summarize_messages(messages)
+    summary = await summarizer.summarize_messages(messages)
     
-    assert "{state:analytical}" in summary
+    assert "{state:analytical" in summary
     assert "[context:technical]" in summary
     assert "database scaling" in summary.lower()
     assert "cache invalidation" in summary.lower()
 
-def test_empty_messages(summarizer):
+@pytest.mark.trio
+async def test_empty_messages(summarizer):
     """Test handling of empty message list."""
     with pytest.raises(SummaryError, match="No messages to summarize"):
-        summarizer.summarize_messages([])
+        await summarizer.summarize_messages([])
 
 def test_batch_size_validation():
     """Test batch size validation on initialization."""
     with pytest.raises(ValueError, match="Batch size must be positive"):
         SummarizerAgent(Mock(), batch_size=0)
 
+@pytest.mark.trio
 @given(messages=st.lists(message_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_choff_state_preservation(tmp_path, messages):
+async def test_choff_state_preservation(tmp_path, messages):
     """Test that CHOFF states are preserved in summaries."""
     cache_dir = tmp_path / "test_cache"
     cache_dir.mkdir(exist_ok=True)
@@ -98,7 +113,7 @@ def test_choff_state_preservation(tmp_path, messages):
         states = re.findall(r'\{state:[^}]+\}', msg)
         all_states.update(states)
     
-    client = Mock()
+    client = AsyncMock()
     client.create_message.return_value = create_mock_response(
         list(all_states),
         "Test summary content"
@@ -107,81 +122,153 @@ def test_choff_state_preservation(tmp_path, messages):
     summarizer = SummarizerAgent(
         client=client,
         cache_dir=cache_dir,
-        batch_size=2
+        batch_size=2,
+        timeout=5.0
     )
     
-    summary = summarizer.summarize_messages(messages)
+    summary = await summarizer.summarize_messages(messages)
     
     # Verify states in summary
-    summary_states = set(summarizer._extract_choff_states(summary))
-    assert summary_states.intersection(all_states), "Summary should preserve at least one original state"
+    summary_states = set(state.state_type for state in summarizer._extract_choff_states(summary))
+    original_states = set()
+    for msg in messages:
+        original_states.update(state.state_type for state in summarizer._extract_choff_states(msg))
+    
+    assert summary_states.intersection(original_states), "Summary should preserve at least one original state"
 
+@pytest.mark.trio
 @given(messages=st.lists(message_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_summary_scoring(tmp_path, messages):
+async def test_summary_scoring(tmp_path, messages):
     """Test summary relevance scoring with property-based testing."""
     cache_dir = tmp_path / "test_cache"
     cache_dir.mkdir(exist_ok=True)
     
-    client = Mock()
+    client = AsyncMock()
     client.create_message.return_value = create_mock_response(
-        ["{state:test}"],
+        ["{state:test[1.0]}"],
         "Test summary"
     )
     
     summarizer = SummarizerAgent(
         client=client,
         cache_dir=cache_dir,
-        batch_size=2
+        batch_size=2,
+        timeout=5.0
     )
     
-    summary = summarizer.summarize_messages(messages)
-    score = summarizer.score_summary(summary, messages)
+    summary = await summarizer.summarize_messages(messages)
+    score = await summarizer.score_summary(summary, messages)
     
     assert 0 <= score <= 1.0
     assert isinstance(score, float)
 
+@pytest.mark.trio
 @given(messages=st.lists(message_strategy, min_size=3, max_size=10))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_large_batch_processing(tmp_path, messages):
+async def test_large_batch_processing(tmp_path, messages):
     """Test processing of messages larger than batch size."""
     cache_dir = tmp_path / "test_cache"
     cache_dir.mkdir(exist_ok=True)
     
-    client = Mock()
+    client = AsyncMock()
     client.create_message.return_value = create_mock_response(
-        ["{state:test}"],
+        ["{state:test[1.0]}"],
         "Test batch summary"
     )
     
     summarizer = SummarizerAgent(
         client=client,
         cache_dir=cache_dir,
-        batch_size=2
+        batch_size=2,
+        timeout=5.0
     )
     
-    summary = summarizer.summarize_messages(messages)
+    summary = await summarizer.summarize_messages(messages)
     assert "Summary" in summary
     assert len(summary.split('\n')) > 1
 
-def test_invalid_message_format(summarizer):
+@pytest.mark.trio
+async def test_invalid_message_format(summarizer):
     """Test handling of messages without CHOFF markup."""
     messages = ["Plain message without CHOFF", "Another plain message"]
     
     with pytest.raises(SummaryError, match="Missing CHOFF markup"):
-        summarizer.summarize_messages(messages)
+        await summarizer.summarize_messages(messages)
 
-@given(batch_size=st.integers(min_value=1, max_value=10))
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_batch_size_property(tmp_path, batch_size):
-    """Test that any positive batch size is valid."""
+@pytest.mark.trio
+async def test_timeout_handling(tmp_path):
+    """Test timeout handling in summarization."""
     cache_dir = tmp_path / "test_cache"
     cache_dir.mkdir(exist_ok=True)
     
-    client = Mock()
+    client = AsyncMock()
+    # Simulate slow response
+    async def slow_response(*args, **kwargs):
+        await trio.sleep(2.0)
+        return create_mock_response(["{state:test[1.0]}"], "Test summary")
+    client.create_message.side_effect = slow_response
+    
     summarizer = SummarizerAgent(
         client=client,
         cache_dir=cache_dir,
-        batch_size=batch_size
+        batch_size=2,
+        timeout=1.0  # Short timeout
     )
-    assert summarizer.batch_size == batch_size
+    
+    messages = ["{state:test[1.0]} Test message"]
+    with pytest.raises(trio.TooSlowError):
+        await summarizer.summarize_messages(messages)
+
+@settings(suppress_health_check=[HealthCheck.return_value])
+class TestSummarizerStateMachine(RuleBasedStateMachine):
+    """State machine for testing summarizer behavior."""
+    
+    messages = Bundle('messages')
+    
+    def __init__(self):
+        super().__init__()
+        self.cache_dir = Path("test_cache")
+        self.cache_dir.mkdir(exist_ok=True)
+        self.client = AsyncMock()
+        self.client.create_message.return_value = create_mock_response(
+            ["{state:test[1.0]}"],
+            "Test summary"
+        )
+        self.summarizer = SummarizerAgent(
+            client=self.client,
+            cache_dir=self.cache_dir,
+            batch_size=2,
+            timeout=5.0
+        )
+        self._nursery = None
+    
+    @initialize(target=messages)
+    def init_messages(self):
+        """Initialize empty message list."""
+        return []
+    
+    @rule(target=messages, message=message_strategy)
+    def add_message(self, message):
+        """Add a message to the list."""
+        return [message]
+    
+    @rule(target=messages)
+    def clear_messages(self):
+        """Clear all messages."""
+        return []
+    
+    @rule(messages=messages)
+    def summarize(self, messages):
+        """Try to summarize current messages."""
+        if not messages:
+            with pytest.raises(SummaryError):
+                trio.run(self.summarizer.summarize_messages, messages)
+            return None
+            
+        summary = trio.run(self.summarizer.summarize_messages, messages)
+        assert isinstance(summary, str)
+        assert len(summary) > 0
+        return None
+
+TestSummarizer = TestSummarizerStateMachine.TestCase
