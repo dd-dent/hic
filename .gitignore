@@ -39,6 +39,7 @@ ENV/
 .coverage
 htmlcov/
 .hypothesis/
+test_cache/
 
 # Project specific
 monkey_business/  # Design docs and notes
