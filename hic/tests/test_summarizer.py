@@ -220,14 +220,16 @@ async def test_timeout_handling(tmp_path):
     with pytest.raises(trio.TooSlowError):
         await summarizer.summarize_messages(messages)
 
-@settings(suppress_health_check=[HealthCheck.return_value])
-class TestSummarizerStateMachine(RuleBasedStateMachine):
+class SummarizerStateMachine(RuleBasedStateMachine):
     """State machine for testing summarizer behavior."""
     
+    # Bundles for managing test state
     messages = Bundle('messages')
+    summaries = Bundle('summaries')
     
     def __init__(self):
         super().__init__()
+        # Setup only non-test state in __init__
         self.cache_dir = Path("test_cache")
         self.cache_dir.mkdir(exist_ok=True)
         self.client = AsyncMock()
@@ -241,11 +243,23 @@ class TestSummarizerStateMachine(RuleBasedStateMachine):
             batch_size=2,
             timeout=5.0
         )
-        self._nursery = None
+    
+    def teardown(self):
+        """Clean up temporary files."""
+        try:
+            self.cache_dir.rmdir()
+        except OSError:
+            pass
+        super().teardown()
     
     @initialize(target=messages)
     def init_messages(self):
         """Initialize empty message list."""
+        return []
+    
+    @initialize(target=summaries)
+    def init_summaries(self):
+        """Initialize summary list."""
         return []
     
     @rule(target=messages, message=message_strategy)
@@ -253,22 +267,18 @@ class TestSummarizerStateMachine(RuleBasedStateMachine):
         """Add a message to the list."""
         return [message]
     
-    @rule(target=messages)
-    def clear_messages(self):
-        """Clear all messages."""
-        return []
-    
-    @rule(messages=messages)
+    @rule(target=summaries, messages=messages)
     def summarize(self, messages):
         """Try to summarize current messages."""
         if not messages:
             with pytest.raises(SummaryError):
                 trio.run(self.summarizer.summarize_messages, messages)
-            return None
+            return []
             
         summary = trio.run(self.summarizer.summarize_messages, messages)
         assert isinstance(summary, str)
         assert len(summary) > 0
-        return None
+        return [summary]
 
-TestSummarizer = TestSummarizerStateMachine.TestCase
+# Simple TestCase definition as recommended
+TestSummarizer = SummarizerStateMachine.TestCase
