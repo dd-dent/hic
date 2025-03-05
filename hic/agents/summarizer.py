@@ -22,6 +22,7 @@ class ChoffState:
     @classmethod
     def from_tag(cls, tag: str) -> 'ChoffState':
         """Parse a CHOFF state tag."""
+        # For backward compatibility, use the original regex parser
         match = re.match(r'\{state:([^}\[]+)(?:\[([0-9.]+)\])?}', tag)
         if not match:
             raise ValueError(f"Invalid CHOFF state tag: {tag}")

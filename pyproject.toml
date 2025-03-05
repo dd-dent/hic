@@ -18,7 +18,7 @@ dev = [
     "hypothesis>=6.125.1",
     "pytest-timeout>=2.3.1",
     "pytest>=8.3.4",
-    "pytest-trio>=0.8.0",
+    "pytest-asyncio>=0.23.0",  # Added for asyncio test support
     "ruff>=0.9.4",
 ]
 
@@ -27,7 +27,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-trio_mode = true
+# Removed trio_mode = true as we're migrating to asyncio
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["hic/tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"

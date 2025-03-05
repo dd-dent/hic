@@ -2,10 +2,11 @@
 from .schema import (
     EventType,
     ErrorSeverity,
-    MessageReceivedEvent,
-    CHOFFStateUpdatedEvent,
-    ErrorOccurredEvent,
-    CHOFFState,
+    EventMetadata,
+    BaseEvent,
+    MessageEvent,
+    StateEvent,
+    ErrorEvent,
     validate_event
 )
 from .store import EventStore, EventStoreError
@@ -13,10 +14,11 @@ from .store import EventStore, EventStoreError
 __all__ = [
     'EventType',
     'ErrorSeverity',
-    'MessageReceivedEvent', 
-    'CHOFFStateUpdatedEvent',
-    'ErrorOccurredEvent',
-    'CHOFFState',
+    'EventMetadata',
+    'BaseEvent',
+    'MessageEvent',
+    'StateEvent',
+    'ErrorEvent',
     'validate_event',
     'EventStore',
     'EventStoreError'
