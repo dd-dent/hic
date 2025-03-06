@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import Mock, AsyncMock
 from pathlib import Path
-import trio
+import asyncio
 from hypothesis import given, strategies as st, settings, HealthCheck
 
 from ..agents.base import BaseAgent, RetryError, NonRetryableError
@@ -58,7 +58,7 @@ def test_agent_initialization(base_agent):
     assert base_agent.base_delay == 1.0
     assert base_agent.usage.total_tokens == 0
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_choff_prompt_handling(mock_claude_client, test_cache_dir):
     """Test CHOFF state handling in prompts."""
     agent = BaseAgent(
@@ -89,7 +89,7 @@ def test_choff_state_preservation(mock_claude_client, test_cache_dir, states):
     for state in states:
         assert state in agent.system_prompt
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_retry_logic(base_agent):
     """Test retry logic with exponential backoff."""
     base_agent.client.create_message.side_effect = [
@@ -102,7 +102,7 @@ async def test_retry_logic(base_agent):
     assert response["content"] == "Success"
     assert base_agent.client.create_message.call_count == 3
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_non_retryable_error(base_agent):
     """Test that NonRetryableError is not retried."""
     base_agent.client.create_message.side_effect = ValueError("Invalid input")
@@ -112,7 +112,7 @@ async def test_non_retryable_error(base_agent):
     
     assert base_agent.client.create_message.call_count == 1
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_max_retries_exceeded(base_agent):
     """Test that RetryError is raised when max retries are exceeded."""
     base_agent.client.create_message.side_effect = Exception("API Error")
@@ -122,7 +122,7 @@ async def test_max_retries_exceeded(base_agent):
     
     assert base_agent.client.create_message.call_count == base_agent.max_retries
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_token_usage_monitoring(base_agent):
     """Test token usage tracking."""
     response = await base_agent.send_message("Test prompt")
@@ -131,7 +131,7 @@ async def test_token_usage_monitoring(base_agent):
     assert base_agent.usage.input_tokens == 10
     assert base_agent.usage.output_tokens == 20
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(prompts=st.lists(prompt_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_token_accumulation(mock_claude_client, test_cache_dir, prompts):
@@ -151,7 +151,7 @@ async def test_token_accumulation(mock_claude_client, test_cache_dir, prompts):
     assert agent.usage.input_tokens == expected_total // 3  # 1/3 of total (10 per message)
     assert agent.usage.output_tokens == 2 * expected_total // 3  # 2/3 of total (20 per message)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_response_caching(base_agent, test_cache_dir):
     """Test response caching for identical prompts."""
     prompt = "Test prompt for caching"
@@ -165,7 +165,7 @@ async def test_response_caching(base_agent, test_cache_dir):
     assert base_agent.client.create_message.call_count == 1
     assert response1 == response2
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_cache_invalidation(base_agent):
     """Test cache invalidation when force_refresh is True."""
     prompt = "Test prompt for cache invalidation"
@@ -178,21 +178,21 @@ async def test_cache_invalidation(base_agent):
     
     assert base_agent.client.create_message.call_count == 2
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_timeout_handling(base_agent):
     """Test message timeout handling."""
     # Create a mock that sleeps longer than the timeout
     async def slow_response(*args, **kwargs):
-        await trio.sleep(0.5)  # Sleep for 500ms
+        await asyncio.sleep(0.5)  # Sleep for 500ms
         return {"content": "too late", "usage": {"input_tokens": 10, "output_tokens": 20}}
     
     base_agent.client.create_message = AsyncMock(side_effect=slow_response)
     
     # Set a short timeout (100ms)
-    with pytest.raises(trio.TooSlowError):
+    with pytest.raises(asyncio.TimeoutError):
         await base_agent.send_message("Test prompt", timeout=0.1)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_atomic_cache_operations(base_agent, test_cache_dir, monkeypatch):
     """Test atomic cache write operations."""
     prompt = "Test atomic cache"
@@ -217,7 +217,7 @@ async def test_atomic_cache_operations(base_agent, test_cache_dir, monkeypatch):
     temp_files = list(test_cache_dir.glob("*.tmp"))
     assert len(temp_files) == 0
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_invalid_usage_data(base_agent):
     """Test handling of invalid usage data."""
     base_agent.client.create_message.return_value = {

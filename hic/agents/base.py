@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, Optional
 import logging
-import trio
+import asyncio
 import attr
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class BaseAgent:
     
     This class provides the foundation for Claude-powered agents with:
     - CHOFF-aware system prompts
-    - Async support with structured concurrency
+    - Async support with asyncio
     - Retry logic with exponential backoff
     - Token usage monitoring
     - Response caching for tests
@@ -95,12 +95,11 @@ class BaseAgent:
             return None
             
         try:
-            # Use trio.to_thread for file I/O
-            async with trio.open_nursery() as nursery:
-                response = await trio.to_thread.run_sync(
-                    lambda: json.loads(cache_path.read_text())
-                )
-                return response
+            # Use asyncio.to_thread for file I/O
+            response = await asyncio.to_thread(
+                lambda: json.loads(cache_path.read_text())
+            )
+            return response
         except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Failed to load cache: {e}")
             return None
@@ -116,15 +115,14 @@ class BaseAgent:
             # Write to temporary file first
             content = json.dumps(response)
             
-            async with trio.open_nursery() as nursery:
-                # Write to temp file
-                await trio.to_thread.run_sync(
-                    lambda: temp_path.write_text(content)
-                )
-                # Atomic rename
-                await trio.to_thread.run_sync(
-                    lambda: temp_path.replace(cache_path)
-                )
+            # Write to temp file
+            await asyncio.to_thread(
+                lambda: temp_path.write_text(content)
+            )
+            # Atomic rename
+            await asyncio.to_thread(
+                lambda: temp_path.replace(cache_path)
+            )
         except Exception as e:
             logger.warning(f"Failed to save cache: {e}")
             # Clean up temp file if it exists
@@ -160,7 +158,7 @@ class BaseAgent:
                 
                 delay = self.base_delay * (2 ** (retry_count - 1))
                 logger.warning(f"Retry {retry_count}/{self.max_retries} after {delay}s delay")
-                await trio.sleep(delay)
+                await asyncio.sleep(delay)
         
         # This should never be reached due to the raise in the loop
         raise RetryError(f"Max retries ({self.max_retries}) exceeded") from last_error
@@ -185,7 +183,7 @@ class BaseAgent:
             RetryError: If max retries are exceeded
             NonRetryableError: For errors that shouldn't be retried
             AgentError: For other agent-related errors
-            trio.TooSlowError: If timeout is exceeded
+            asyncio.TimeoutError: If timeout is exceeded
         """
         # Check cache first unless force refresh
         if not force_refresh:
@@ -215,12 +213,12 @@ class BaseAgent:
 
         # Use optional timeout
         if timeout is not None:
-            with trio.move_on_after(timeout) as cancel_scope:
-                response = await self._retry_with_backoff(_send)
-                if cancel_scope.cancelled_caught:
-                    raise trio.TooSlowError("Message send timed out")
-            if cancel_scope.cancelled_caught:
-                raise trio.TooSlowError("Message send timed out")
-            return response
+            try:
+                return await asyncio.wait_for(
+                    self._retry_with_backoff(_send),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError("Message send timed out")
         else:
             return await self._retry_with_backoff(_send)

@@ -10,7 +10,6 @@ authors = [
 dependencies = [
     "anthropic>=0.45.2",
     "fastapi[standard]>=0.115.8",
-    "trio>=0.28.0",
 ]
 
 [dependency-groups]
@@ -18,7 +17,7 @@ dev = [
     "hypothesis>=6.125.1",
     "pytest-timeout>=2.3.1",
     "pytest>=8.3.4",
-    "pytest-asyncio>=0.23.0",  # Added for asyncio test support
+    "pytest-asyncio>=0.23.0",
     "ruff>=0.9.4",
 ]
 
