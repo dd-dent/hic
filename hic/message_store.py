@@ -1,4 +1,5 @@
 import sqlite3
+import asyncio
 from datetime import datetime, timezone
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ class MessageStore:
         )
         # Enable foreign key support
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
         return conn
     
     def _init_db(self):
@@ -84,12 +86,17 @@ class MessageStore:
                 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
             """)
     
-    def __len__(self) -> int:
+    def _len_sync(self) -> int:
+        """Synchronous implementation of length."""
         with self._get_connection() as conn:
             return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     
-    def add(self, message: Message) -> int:
-        """Add a message and return its ID."""
+    async def __len__(self) -> int:
+        """Async wrapper for getting message count."""
+        return await asyncio.to_thread(self._len_sync)
+    
+    def _add_sync(self, message: Message) -> int:
+        """Synchronous implementation of message addition."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO messages (speaker, content, timestamp) VALUES (?, ?, ?)",
@@ -106,8 +113,12 @@ class MessageStore:
             
             return message_id
     
-    def get(self, message_id: int) -> Message:
-        """Retrieve a message by ID."""
+    async def add(self, message: Message) -> int:
+        """Async wrapper for adding a message."""
+        return await asyncio.to_thread(self._add_sync, message)
+    
+    def _get_sync(self, message_id: int) -> Message:
+        """Synchronous implementation of message retrieval."""
         with self._get_connection() as conn:
             # Get message
             cursor = conn.execute(
@@ -133,8 +144,12 @@ class MessageStore:
                 timestamp=row[2]
             )
     
-    def delete(self, message_id: int) -> None:
-        """Delete a message by ID."""
+    async def get(self, message_id: int) -> Message:
+        """Async wrapper for retrieving a message by ID."""
+        return await asyncio.to_thread(self._get_sync, message_id)
+    
+    def _delete_sync(self, message_id: int) -> None:
+        """Synchronous implementation of message deletion."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 "DELETE FROM messages WHERE id = ?",
@@ -144,8 +159,12 @@ class MessageStore:
                 raise KeyError(f"Message {message_id} not found")
             # Tags are automatically deleted due to ON DELETE CASCADE
     
-    def find_by_choff_tag(self, tag: str) -> List[Message]:
-        """Find all messages with a specific CHOFF tag."""
+    async def delete(self, message_id: int) -> None:
+        """Async wrapper for deleting a message by ID."""
+        await asyncio.to_thread(self._delete_sync, message_id)
+    
+    def _find_by_choff_tag_sync(self, tag: str) -> List[Message]:
+        """Synchronous implementation of CHOFF tag search."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
                 SELECT DISTINCT m.id, m.speaker, m.content, m.timestamp
@@ -175,3 +194,7 @@ class MessageStore:
                 ))
             
             return messages
+    
+    async def find_by_choff_tag(self, tag: str) -> List[Message]:
+        """Async wrapper for finding messages by CHOFF tag."""
+        return await asyncio.to_thread(self._find_by_choff_tag_sync, tag)
