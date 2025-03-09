@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Dict
 import attr
 import logging
+import asyncio
 
 from .base import BaseAgent, AgentError, NonRetryableError
 from ..message_store import Message, MessageStore
@@ -102,7 +103,7 @@ retrieval context and identified patterns."""
         Raises:
             InvalidQueryError: If query parameters are invalid
             RetrievalError: If retrieval fails
-            trio.TooSlowError: If operation times out
+            asyncio.TimeoutError: If operation times out
         """
         if not query.strip():
             return []
@@ -187,7 +188,7 @@ Format: One message per line as JSON:
             
         Raises:
             RetrievalError: If analysis fails
-            trio.TooSlowError: If operation times out
+            asyncio.TimeoutError: If operation times out
         """
         if not messages:
             return {}

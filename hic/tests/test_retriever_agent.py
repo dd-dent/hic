@@ -1,13 +1,13 @@
 """Tests for the RetrieverAgent."""
 import pytest
-import trio
+import asyncio
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, MagicMock
 from hypothesis import given, strategies as st, settings, HealthCheck
 from hypothesis.stateful import RuleBasedStateMachine, rule, Bundle, initialize
 from typing import List
 import json
-from datetime import timezone
+from datetime import timezone, datetime
 
 from hic.agents.retriever import RetrieverAgent, ScoredMessage, RetrievalError
 from hic.message_store import Message, Speaker
@@ -79,14 +79,14 @@ def retriever(mock_client, mock_store, tmp_path):
         timeout=5.0
     )
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_find_relevant(retriever, mock_client, mock_store):
     """Test basic retrieval functionality."""
     message = Message(
         speaker=Speaker.USER,
         content="Let's discuss recursion",
         choff_tags=["{state:curious[0.8]}", "[context:technical]"],
-        timestamp=trio.current_time()
+        timestamp=datetime.now(timezone.utc)
     )
     
     # Setup mock store to return our test message
@@ -105,14 +105,14 @@ async def test_find_relevant(retriever, mock_client, mock_store):
     assert len(results[0].matched_patterns) > 0
     mock_store.find_by_choff_tag.assert_called_with("{state:curious}")
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_empty_query(retriever, mock_store):
     """Test handling of empty query."""
     results = await retriever.find_relevant("")
     assert len(results) == 0
     mock_store.find_by_choff_tag.assert_not_called()
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(messages=st.lists(message_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_choff_pattern_analysis(tmp_path, messages):
@@ -146,7 +146,7 @@ async def test_choff_pattern_analysis(tmp_path, messages):
     assert isinstance(patterns, dict)
     assert all(isinstance(v, list) for v in patterns.values())
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_timeout_handling(tmp_path):
     """Test timeout handling in retrieval."""
     cache_dir = tmp_path / "test_cache"
@@ -155,7 +155,7 @@ async def test_timeout_handling(tmp_path):
     client = AsyncMock()
     # Simulate slow response
     async def slow_response(*args, **kwargs):
-        await trio.sleep(2.0)
+        await asyncio.sleep(2.0)
         return create_mock_response()
     client.create_message.side_effect = slow_response
     
@@ -165,7 +165,7 @@ async def test_timeout_handling(tmp_path):
             speaker=Speaker.USER,
             content="Test message",
             choff_tags=["{state:test}"],
-            timestamp=trio.current_time()
+            timestamp=datetime.now(timezone.utc)
         )
     ]
     
@@ -202,6 +202,8 @@ class RetrieverStateMachine(RuleBasedStateMachine):
             cache_dir=None,  # Disable caching for state machine tests
             timeout=5.0
         )
+        # Create event loop for running async tasks
+        self.loop = asyncio.new_event_loop()
     
     def teardown(self):
         """Clean up temporary files."""
@@ -209,6 +211,8 @@ class RetrieverStateMachine(RuleBasedStateMachine):
             self.cache_dir.rmdir()
         except OSError:
             pass
+        if hasattr(self, 'loop') and self.loop.is_running():
+            self.loop.close()
         super().teardown()
     
     @initialize(target=messages)
@@ -240,11 +244,10 @@ class RetrieverStateMachine(RuleBasedStateMachine):
         """Try to find relevant messages."""
         if not query or not message:
             return
-            
-        results = trio.run(
-            self.retriever.find_relevant,
-            "test query",
-            query
+        
+        # Run the coroutine in the event loop
+        results = self.loop.run_until_complete(
+            self.retriever.find_relevant("test query", query)
         )
         
         assert isinstance(results, list)

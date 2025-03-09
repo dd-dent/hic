@@ -1,9 +1,9 @@
 """CHOFF-aware message summarization agent."""
 import re
+import asyncio
 from pathlib import Path
 from typing import List, Set, Dict
 from difflib import SequenceMatcher
-import trio
 from dataclasses import dataclass, field
 
 from .base import BaseAgent, AgentError
@@ -158,7 +158,7 @@ Messages:
             
         Raises:
             SummaryError: If summarization fails or messages lack CHOFF markup
-            trio.TooSlowError: If operation times out
+            asyncio.TimeoutError: If operation times out
         """
         if not messages:
             raise SummaryError("No messages to summarize")
@@ -172,7 +172,7 @@ Messages:
             try:
                 summary = await self._process_batch(batch, states)
                 summaries.append(summary)
-            except trio.TooSlowError:
+            except asyncio.TimeoutError:
                 # Propagate timeout error
                 raise
             except Exception as e:
@@ -180,23 +180,28 @@ Messages:
                 raise SummaryError(f"Batch processing failed: {e}") from e
         
         # Process batches with timeout
-        with trio.move_on_after(self.timeout or float('inf')):
-            async with trio.open_nursery() as nursery:
-                # Start batch processors
-                for i in range(0, len(messages), self.batch_size):
-                    batch = messages[i:i + self.batch_size]
-                    
-                    # Extract all CHOFF states from batch
-                    states = set()
-                    for msg in batch:
-                        states.update(state.state_type for state in self._extract_choff_states(msg))
-                    
-                    # Process batch
-                    nursery.start_soon(process_batch, batch, states)
-        
-        # Check if we timed out
-        if not summaries:
-            raise trio.TooSlowError("Message processing timed out")
+        try:
+            tasks = []
+            for i in range(0, len(messages), self.batch_size):
+                batch = messages[i:i + self.batch_size]
+                
+                # Extract all CHOFF states from batch
+                states = set()
+                for msg in batch:
+                    states.update(state.state_type for state in self._extract_choff_states(msg))
+                
+                # Process batch
+                tasks.append(asyncio.create_task(process_batch(batch, states)))
+            
+            # Wait for all tasks to complete with timeout
+            if self.timeout:
+                await asyncio.wait_for(asyncio.gather(*tasks), timeout=self.timeout)
+            else:
+                await asyncio.gather(*tasks)
+        except asyncio.TimeoutError:
+            # Check if we timed out
+            if not summaries:
+                raise asyncio.TimeoutError("Message processing timed out")
         
         # Combine batch summaries if needed
         if len(summaries) == 1:

@@ -1,7 +1,7 @@
 """Tests for the SummarizerAgent."""
 import re
 import pytest
-import trio
+import asyncio
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
 from hypothesis import given, strategies as st, settings, HealthCheck
@@ -68,7 +68,7 @@ def summarizer(mock_client, tmp_path):
         timeout=5.0  # Add timeout for tests
     )
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_summarize_batch(summarizer, mock_client):
     """Test basic batch summarization functionality."""
     messages = [
@@ -88,7 +88,7 @@ async def test_summarize_batch(summarizer, mock_client):
     assert "database scaling" in summary.lower()
     assert "cache invalidation" in summary.lower()
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_empty_messages(summarizer):
     """Test handling of empty message list."""
     with pytest.raises(SummaryError, match="No messages to summarize"):
@@ -99,7 +99,7 @@ def test_batch_size_validation():
     with pytest.raises(ValueError, match="Batch size must be positive"):
         SummarizerAgent(Mock(), batch_size=0)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(messages=st.lists(message_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_choff_state_preservation(tmp_path, messages):
@@ -136,7 +136,7 @@ async def test_choff_state_preservation(tmp_path, messages):
     
     assert summary_states.intersection(original_states), "Summary should preserve at least one original state"
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(messages=st.lists(message_strategy, min_size=1, max_size=5))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_summary_scoring(tmp_path, messages):
@@ -163,7 +163,7 @@ async def test_summary_scoring(tmp_path, messages):
     assert 0 <= score <= 1.0
     assert isinstance(score, float)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(messages=st.lists(message_strategy, min_size=3, max_size=10))
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_large_batch_processing(tmp_path, messages):
@@ -188,7 +188,7 @@ async def test_large_batch_processing(tmp_path, messages):
     assert "Summary" in summary
     assert len(summary.split('\n')) > 1
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_invalid_message_format(summarizer):
     """Test handling of messages without CHOFF markup."""
     messages = ["Plain message without CHOFF", "Another plain message"]
@@ -196,7 +196,7 @@ async def test_invalid_message_format(summarizer):
     with pytest.raises(SummaryError, match="Missing CHOFF markup"):
         await summarizer.summarize_messages(messages)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_timeout_handling(tmp_path):
     """Test timeout handling in summarization."""
     cache_dir = tmp_path / "test_cache"
@@ -205,7 +205,7 @@ async def test_timeout_handling(tmp_path):
     client = AsyncMock()
     # Simulate slow response
     async def slow_response(*args, **kwargs):
-        await trio.sleep(2.0)
+        await asyncio.sleep(2.0)
         return create_mock_response(["{state:test[1.0]}"], "Test summary")
     client.create_message.side_effect = slow_response
     
@@ -217,7 +217,7 @@ async def test_timeout_handling(tmp_path):
     )
     
     messages = ["{state:test[1.0]} Test message"]
-    with pytest.raises(trio.TooSlowError):
+    with pytest.raises(asyncio.TimeoutError):
         await summarizer.summarize_messages(messages)
 
 class SummarizerStateMachine(RuleBasedStateMachine):
@@ -272,10 +272,10 @@ class SummarizerStateMachine(RuleBasedStateMachine):
         """Try to summarize current messages."""
         if not messages:
             with pytest.raises(SummaryError):
-                trio.run(self.summarizer.summarize_messages, messages)
+                asyncio.run(self.summarizer.summarize_messages(messages))
             return []
             
-        summary = trio.run(self.summarizer.summarize_messages, messages)
+        summary = asyncio.run(self.summarizer.summarize_messages(messages))
         assert isinstance(summary, str)
         assert len(summary) > 0
         return [summary]
