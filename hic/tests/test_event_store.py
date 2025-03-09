@@ -52,10 +52,11 @@ def message_events(draw):
 @st.composite
 def state_events(draw):
     """Generate valid StateEvents."""
+    state_type = draw(st.text(min_size=1, max_size=50))
     return StateEvent(
         metadata=draw(event_metadata()),
-        state_type=draw(st.text(min_size=1, max_size=50)),
-        intensity=draw(st.floats(min_value=0.0, max_value=1.0)),
+        state_expression=state_type,  # For basic states, just use the state type string
+        expression_type="basic",
         context=draw(st.none() | st.text(min_size=1, max_size=100))
     )
 
@@ -88,7 +89,7 @@ def temp_db():
         except OSError:
             pass
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_store_initialization():
     """Test store initialization creates required tables."""
     with temp_db() as store:
@@ -101,7 +102,7 @@ async def test_store_initialization():
         assert len(retrieved) == 1
         assert retrieved[0].content == "test"
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(message_events())
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_message_event_roundtrip(event):
@@ -117,7 +118,7 @@ async def test_message_event_roundtrip(event):
         assert retrieved_event.content == event.content
         assert retrieved_event.source == event.source
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(state_events())
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_state_event_roundtrip(event):
@@ -134,7 +135,7 @@ async def test_state_event_roundtrip(event):
         assert retrieved_event.intensity == event.intensity
         assert retrieved_event.context == event.context
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(error_events())
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_error_event_roundtrip(event):
@@ -153,7 +154,7 @@ async def test_error_event_roundtrip(event):
         assert retrieved_event.stack_trace == event.stack_trace
         assert retrieved_event.context == event.context
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_conversation_retrieval():
     """Test retrieving events by conversation ID."""
     with temp_db() as store:
@@ -173,7 +174,7 @@ async def test_conversation_retrieval():
         assert all(e.metadata.conversation_id == conv_id for e in retrieved)
         assert [e.content for e in retrieved] == ["test0", "test1", "test2"]
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 async def test_conversation_limit():
     """Test limiting conversation event retrieval."""
     with temp_db() as store:
@@ -192,7 +193,7 @@ async def test_conversation_limit():
         assert len(limited) == 3
         assert all(e.metadata.conversation_id == conv_id for e in limited)
 
-@pytest.mark.trio
+@pytest.mark.asyncio
 @given(st.lists(
     st.one_of(message_events(), state_events(), error_events()),
     min_size=1,

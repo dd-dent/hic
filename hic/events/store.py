@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, TypeVar, Dict, Any
-import trio
+import asyncio
 
 from .schema import (
     BaseEvent,
@@ -91,7 +91,9 @@ class EventStore:
             return {
                 'state_type': event.state_type,
                 'intensity': event.intensity,
-                'context': event.context
+                'context': event.context,
+                'state_expression': event.state_expression,
+                'expression_type': event.expression_type
             }
         elif isinstance(event, ErrorEvent):
             return {
@@ -127,10 +129,20 @@ class EventStore:
                 source=payload.get('source')
             )
         elif event_type == 'state':
+            # Use state_expression if available, otherwise construct from state_type/intensity
+            if 'state_expression' in payload:
+                state_expression = payload['state_expression']
+                expression_type = payload.get('expression_type', 'basic')
+            else:
+                # Backward compatibility: convert state_type/intensity to state_expression
+                state_type = payload['state_type']
+                state_expression = state_type
+                expression_type = 'basic'
+            
             return StateEvent(
                 metadata=metadata,
-                state_type=payload['state_type'],
-                intensity=payload['intensity'],
+                state_expression=state_expression,
+                expression_type=expression_type,
                 context=payload.get('context')
             )
         elif event_type == 'error':
@@ -155,10 +167,9 @@ class EventStore:
         validate_event(event)
         payload = self._serialize_event(event)
         
-        async with trio.open_nursery() as nursery:
-            await trio.to_thread.run_sync(
-                lambda: self._append_sync(event, json.dumps(payload))
-            )
+        await asyncio.to_thread(
+            lambda: self._append_sync(event, json.dumps(payload))
+        )
     
     def _append_sync(self, event: BaseEvent, payload_json: str):
         """Synchronous event append operation."""
@@ -203,11 +214,10 @@ class EventStore:
         Returns:
             List of events in chronological order
         """
-        async with trio.open_nursery() as nursery:
-            rows = await trio.to_thread.run_sync(
-                lambda: self._get_by_conversation_sync(conversation_id, limit)
-            )
-            return [self._deserialize_event(row) for row in rows]
+        rows = await asyncio.to_thread(
+            lambda: self._get_by_conversation_sync(conversation_id, limit)
+        )
+        return [self._deserialize_event(row) for row in rows]
     
     def _get_by_conversation_sync(
         self,
